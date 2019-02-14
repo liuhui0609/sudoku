@@ -1,0 +1,564 @@
+<html>
+ <head>
+ 	<title>九宫格</title>
+ 	<style type="text/css">
+ 		body{
+ 			font-size: 14px;
+ 		}
+ 		 table tr td { 
+ 		 	border:1px solid #0094ff; 
+ 		 	height: 30px;
+ 		 	width: 35px;
+ 		 	font-weight: bold;
+ 		 }
+
+ 		 table tr td:nth-child(3n+0) { 
+ 		 	border-right: 3px solid #0094ff; 
+ 		 }
+
+ 		 table tr td:nth-child(3n+1) { 
+ 		 	border-left: 3px solid #0094ff; 
+ 		 }
+
+ 		 table tr:nth-child(3n+0) td { 
+ 		 	border-bottom: 3px solid #0094ff; 
+ 		 }
+
+ 		 table tr:nth-child(3n+1) td { 
+ 		 	border-top: 3px solid #0094ff; 
+ 		 }
+
+ 		 table input, table div {
+ 		 	width: 100%;
+ 		 	line-height: 30px;
+ 		 	text-align: center;
+ 		 }
+
+ 		 table div {
+ 		 	color: red;
+ 		 }
+
+ 		 .empty{
+ 		 	font-weight: normal;
+ 		 	color: #dddddd;
+ 		 }
+
+ 	</style>
+ </head>
+ <body>
+		<div id="app">
+			<div>
+				请选择题目：
+				<button @click="simpleModel()">简单</button>
+				<button @click="complexModel()">大师</button><br/>
+				&nbsp;&nbsp;也可以自己填写，填写完成后点击 <button @click="ownModel()">出题完成</button>
+			</div>
+			<br/>
+			<div>
+				<button @click="start()">开始计算</button>
+				<button @click="clear()">重新开始</button>
+				剩余空格数量 : {{remainder}}
+			</div>
+			<table>
+		 		<tr v-for='(tr, index) in digitDataArr'>
+		 			<td v-for='(td, index) in tr'>
+		 				<div v-if="td.isReadonly">{{td.digit}}</div>
+		 				<input v-else type="input" 
+		 					v-bind:class="{'empty' : !td.isFixed}" v-model="td.digit"/>
+		 			</td>
+		 		</tr>
+		 	</table>
+		</div>
+ 	<script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+ 	<script type="text/javascript">
+ 		new Vue({
+		  el: '#app',
+		  data: {
+		  	row : 9, // 行数
+		  	col : 9, // 列数
+		  	unit : 3, // 每几行、几列为一个单位
+		  	remainder : 81, //剩余空格
+		  	dummyNodeArr : [],//假设节点坐标
+		    digitDataArr : [],//存储数据数组
+		    	// {//数据模型
+			  	// 	digit : 0, //填写数字
+			  	// 	maybeDigitArr : [1,2,3,4,5,6,7,8,9], //可能数字
+			  	// 	isFixed : false, //是否已经确定
+			  	// 	isReadonly : false, //是否只读.true题目给出的数字；false自己填写数字；
+			  	// }
+		  },methods: {
+		  	start: function(){//计算入口
+		  		
+		  		console.log("==== 第一轮轮询开始 ====");
+		  		console.time("UsedTime")  ;
+
+		  		this._calc();//计算
+		  		
+		  		console.log("==== 第二轮轮询开始 ====");
+		  		while(this.remainder !=0){
+					// 获取第一个多选择节点
+	  				var dumyNode = this._getDummyNode();
+	  				// 开始假设方式为依托的计算
+		  			this._calcDummy(dumyNode);
+		  		}
+
+		  		// 如果存在假设情况推出的节点，则将假设的结果、修改为已确认.
+		  		this._finish();
+
+		  		console.timeEnd("UsedTime") ;
+
+		  	},
+		  	_calc(){//计算
+		  		// 保留上一次空格数量
+		  		var lastRemainder = this.remainder;
+		  		var lastLastRemainder = this.remainder;
+		  		// 开始计算
+		  		this._calcSub();
+
+		  		// 如果发现一次轮训减少了空格数量、并且存在可填写的空格，则可再次轮训
+		  		while(lastLastRemainder != this.remainder && this.remainder !=0){
+		  			lastLastRemainder = lastRemainder;
+		  			lastRemainder = this.remainder;
+					this._calcSub();
+		  		}
+		  	},
+		  	_calcSub(){//计算
+				for(var i = 0; i< this.row; i++){
+					for(var j = 0; j< this.col; j++){
+						// 获取节点
+						var node = this.digitDataArr[i][j];
+						if(node.isFixed){
+							// 已经填写完成，则不需要计算
+							continue;
+						}
+						
+						// 获取节点可能填写数据的集合
+						var diffSet = node.maybeDigitArr;
+
+						// 与横向进行差集
+						var rowDigitArr = this._getRowDataForNotEmpty(i);
+						diffSet = this._calcDiffSet(diffSet, rowDigitArr);
+
+						// 与纵向进行差集
+						var colDigitArr = this._getColDataForNotEmpty(j);
+						diffSet = this._calcDiffSet(diffSet, colDigitArr);
+
+						// 与内部方框进行差集
+						var innDigitArr = this._getInnDataForNotEmpty(i, j);
+						diffSet = this._calcDiffSet(diffSet, innDigitArr);
+
+						node.maybeDigitArr = diffSet;
+						//console.log(i + "行" + j + "列数据可能：" + diffSet);
+						if(node.maybeDigitArr.length == 1){ //如果只存在一种可能性，则进行数据的填写
+							this._setData(i, j, node.maybeDigitArr[0]);
+						}
+
+					}
+		  		}
+		  	},
+		  	_calcDummy({i = 0, j = 0}){//以假设为依托，计算.(参数:假设的节点坐标)
+		  		var isSuccess = true;
+	  			while(this.remainder != 0){ // 如果已经不存在可填写的数字，则推出程序
+	  				isSuccess = false;
+
+	  				// 记录假设点
+		  			this.dummyNodeArr.push({'iStart':i, 'jStart':j});
+
+					// 清理假设点之后的数据（不包括假设点）
+					//console.log("清除假设点之后的数据.假设点：" + i + "行" + j + "列");
+	  				this._clearDummyNode({'iStart':i, 'jStart':j});
+
+	  				// 获取假设定可选择一个最小的数据
+	  				var dumyData = this._getMinData(i, j);
+	  				//console.log("假设点" + i + "行" + j +"列.数据为：" + dumyData);
+
+	  				if(!dumyData){ // 如果不存在可选择数据，则推翻假设
+	  					//console.log("假设点错误");
+	  					// 删除最后一个假设点
+	  					this.dummyNodeArr.pop();
+	  					// 删除并弹出上一个假设点
+	  					var dumyNode = this.dummyNodeArr.pop();
+	  					if(!dumyNode){ // 如果不存在假设节点，则直接返回
+		  					return;
+		  				}
+
+						// 清理之前的数据
+	  					this._clearDummyNode(dumyNode);
+						// 重新计算
+						this._calcDummy({'i': dumyNode.iStart, "j": dumyNode.jStart});
+	  					return;
+	  				} else { // 如果存在假设数据，则根据假设数据进行推演
+
+	  					// 设定假设点的假设数据
+	  					this._setDummyData(i, j, dumyData);
+
+	  					////////// 开始以假设为依托的计算 ////////////
+	  					// 保留上一次空格数量
+		  				var lastRemainder = this.remainder;
+		  				// 保留上上一次空格数量
+		  				var lastLastRemainder = this.remainder;
+
+	  					// 进行计算
+		  				isSuccess = this._calcDummySub();
+
+		  				// 如果一轮计算成功、且空格数量减少，则进行下一次假设
+		  				while(isSuccess && lastLastRemainder != this.remainder && this.remainder != 0){
+		  					lastLastRemainder = lastRemainder;
+		  					lastRemainder = this.remainder;
+
+		  					isSuccess = this._calcDummySub();
+		  				}
+
+		  				if(!isSuccess){// 如果一轮计算失败，则假设错误。需要推翻假设数据 
+		  					// 删除最后一个假设点
+	  						this.dummyNodeArr.pop();
+		  					// 清理之前的数据
+		  					this._clearDummyNode({'iStart':i, 'jStart':j});
+							// 重新计算
+							this._calcDummy({i,j});
+		  					return;
+		  				} else {// 如果一轮计算成功、但是空格数量并未减少，则开始进行下一个节点的假设
+		  					var dumyNode = this._getDummyNode();
+		  					if(!dumyNode){
+		  						return;
+		  					}
+		  					this._calcDummy(dumyNode);
+		  				}
+	  				}
+	  				
+	  			}
+		  	},
+		  	_calcDummySub(){//假设
+				for(var i = 0; i< this.row; i++){
+					for(var j = 0; j< this.col; j++){
+						// 获取节点
+						var node = this.digitDataArr[i][j];
+						if(node.isFixed || node.digit != 0){
+							// 以及填写完成，不需要计算
+							continue;
+						}
+						
+						var diffSet = node.maybeDigitArr;
+
+						// 与横向进行差集
+						var rowDigitArr = this._getRowDataForNotEmpty(i);
+						diffSet = this._calcDiffSet(diffSet, rowDigitArr);
+
+						// 与纵向进行差集
+						var colDigitArr = this._getColDataForNotEmpty(j);
+						diffSet = this._calcDiffSet(diffSet, colDigitArr);
+
+						// 与内部方框进行差集
+						var innDigitArr = this._getInnDataForNotEmpty(i, j);
+						diffSet = this._calcDiffSet(diffSet, innDigitArr);
+
+						//console.log(i + "行" + j + "列数据可能：" + diffSet);
+						if(diffSet.length == 0){
+							//console.error("假设错误:" + i + "行" + j + "列无可填写数据");
+							return false;
+						} else if(diffSet.length == 1){
+							this._setDummyData(i, j, diffSet[0]);
+						}
+						
+					}
+		  		}
+		  		return true;
+		  	},
+		  	_clearDummyNode({iStart = 0, jStart = 0}){ // 清理该节点之后的数据	
+		  		for(var i = this.row - 1; i >= 0; i--){
+		  			for(var j = this.col - 1; j >= 0; j--){
+	  					// 找到相同的记录
+	  					if(i == iStart && j == jStart){
+	  						return;
+	  					}
+
+	  					// 该记录之前的数据进行清理
+	  					this._clearDummyData(i, j);
+		  			}
+		  		}
+		  	},
+		  	_getDummyNode(){//获取第一个可以假设的数据
+		  		for(var i = 0; i< this.row; i++){
+					for(var j = 0; j< this.col; j++){
+						// 获取节点
+						var node = this.digitDataArr[i][j];
+						if(node.digit == 0){ // 如果这个节点的数值是0，则为可以假设的节点
+							return {i,j}
+						}
+
+					}
+				}
+		  	},
+		  	_getMinData(i, j){ //选择该节点可假设的其中最小的一个数字
+		  		var node = this.digitDataArr[i][j];
+				if(node.isFixed){
+					return 0;
+				}
+
+		  		var diffSet = node.maybeDigitArr;
+
+				// 与横向进行差集
+				var rowDigitArr = this._getRowDataForNotEmpty(i);
+				diffSet = this._calcDiffSet(diffSet, rowDigitArr);
+
+				// 与纵向进行差集
+				var colDigitArr = this._getColDataForNotEmpty(j);
+				diffSet = this._calcDiffSet(diffSet, colDigitArr);
+
+				// 与内部方框进行差集
+				var innDigitArr = this._getInnDataForNotEmpty(i, j);
+				diffSet = this._calcDiffSet(diffSet, innDigitArr);
+
+
+		  		if(!diffSet || !diffSet.length){
+		  			return 0;
+		  		}
+
+		  		var arr = diffSet.filter(function(item) { 
+				     return item > node.digit; 
+				});
+				var data = Math.min(...arr);
+				if(!isFinite(data)){
+					return 0;
+				}
+				return data;
+		  	},
+		  	_getRowDataForNotEmpty(row){ //获取一行非空的数据数组
+		  		var digitArr = [];
+		  		for(var j = 0; j< this.col; j++){
+		  			var node = this.digitDataArr[row][j];
+		  			node.digit ? digitArr.push(node.digit) : null;
+		  		}
+		  		return digitArr;
+		  	},
+		  	_getColDataForNotEmpty(col){ //获取一列非空的数据数组
+		  		var digitArr = [];
+		  		for(var i = 0; i< this.row; i++){
+		  			var node = this.digitDataArr[i][col];
+		  			node.digit ? digitArr.push(node.digit) : null;
+		  		}
+		  		return digitArr;
+		  	},
+		  	_getInnDataForNotEmpty(row, col){ //获取内部非空的数据数组
+		  		var startRow = Math.floor(row/this.unit) * this.unit;
+		  		var startCol = Math.floor(col/this.unit) * this.unit;
+
+		  		var endRow = startRow + 3;
+		  		var endCol = startCol + 3;
+
+		  		var digitArr = [];
+		  		for(var i = startRow; i< endRow; i++){
+					for(var j = startCol; j< endCol; j++){
+						var node = this.digitDataArr[i][j];
+		  				node.digit ? digitArr.push(node.digit) : null;
+					}
+				}
+		  		return digitArr;
+		  	},
+		  	_calcDiffSet(arr1 ,arr2){//计算差集
+		  		let arr = [];
+		  		if(!arr1 || !arr2){
+		  			return arr;
+		  		}
+
+		  		let set1 = new Set(arr1);
+				let set2 = new Set(arr2); 
+
+				// 求差集
+				let set = new Set([...set1].filter(x => !set2.has(x)));
+
+				return Array.from(set);
+		  	},
+		  	clear: function(){ // 重新开始
+		  		this.init();
+		  	},
+		  	init : function(){ // 初始化页面
+		  		this.digitDataArr = new Array();
+		  		this.remainder = 81;
+			  	for(var i = 0 ; i < this.row ; i++){
+			  		this.digitDataArr[i] = new Array();
+			  		for(var j = 0 ; j < this.col ; j++){
+			  			var node = {
+			  				digit : 0, //填写数字
+			  				maybeDigitArr : [1,2,3,4,5,6,7,8,9], //可能数字
+			  				isFixed : false, //是否已经确定
+			  				isReadonly : false, //是否只读.true题目给出的数字；false自己填写数字；
+			  			}
+			  			this.digitDataArr[i].push(node);
+			  		}
+			  	}
+		  	},
+		  	_setData : function(row, col, digit){//填写确定数字
+		  		if(!this.digitDataArr[row][col].isFixed){
+		  			this.digitDataArr[row][col].digit = digit;
+					this.digitDataArr[row][col].isFixed = true;
+		  		}
+		  		this.__calcRemainder();
+		  	},
+		  	_setDummyData : function(row, col, digit){//填写假设数字
+		  		if(!this.digitDataArr[row][col].isFixed ){
+					this.digitDataArr[row][col].digit = digit;
+					this.digitDataArr[row][col].isFixed = false;
+		  		}
+		  		this.__calcRemainder();
+		  	},
+		  	_clearDummyData : function(row, col){
+		  		if(!this.digitDataArr[row][col].isFixed 
+		  			&& this.digitDataArr[row][col].digit !=0){
+					this.digitDataArr[row][col].digit = 0;
+					this.digitDataArr[row][col].isFixed = false;
+		  		}
+		  		this.__calcRemainder();
+		  	},
+		  	_setReadonlyData : function(row, col, digit){//设定题目给定的数字
+				this.digitDataArr[row][col].digit = digit;
+				this.digitDataArr[row][col].isFixed = true;
+				this.digitDataArr[row][col].isReadonly = true;
+
+				this.__calcRemainder();
+		  	},
+		  	__calcRemainder : function(){
+		  		var remainder = 0;
+		  		for(var i = 0; i< this.row; i++){
+					for(var j = 0; j< this.col; j++){
+						var node = this.digitDataArr[i][j];
+						if(node.digit == 0){
+							remainder ++;
+						}
+					}
+				}
+				this.remainder = remainder;
+		  	},
+		  	_finish : function(){//计算结束，将所有的节点均设定为已经确认状态
+		  		var remainder = 0;
+		  		for(var i = 0; i< this.row; i++){
+					for(var j = 0; j< this.col; j++){
+						var node = this.digitDataArr[i][j];
+						if(!node.isFixed){
+							node.isFixed = true;
+						}
+					}
+				}
+				this.remainder = remainder;
+		  	},
+		  	simpleModel : function(){ // 题目：简单模式
+		  		// 第一行
+		  		this._setReadonlyData(0, 0, 1);
+		  		this._setReadonlyData(0, 3, 5);
+		  		this._setReadonlyData(0, 4, 9);
+		  		this._setReadonlyData(0, 5, 6);
+		  		this._setReadonlyData(0, 6, 4);
+				this._setReadonlyData(0, 7, 3);
+
+				// 第二行
+				this._setReadonlyData(1, 0, 5);
+				this._setReadonlyData(1, 1, 2);
+				this._setReadonlyData(1, 2, 4);
+				this._setReadonlyData(1, 4, 7);
+				this._setReadonlyData(1, 8, 8);
+
+				// 第三行
+				this._setReadonlyData(2, 4, 8);
+				this._setReadonlyData(2, 5, 4);
+				this._setReadonlyData(2, 7, 1);
+				this._setReadonlyData(2, 8, 7);
+
+				// 第四行
+				this._setReadonlyData(3, 0, 6);
+				this._setReadonlyData(3, 1, 7);
+				this._setReadonlyData(3, 2, 9);
+				this._setReadonlyData(3, 5, 2);
+
+				// 第五行
+				this._setReadonlyData(4, 1, 3);
+				this._setReadonlyData(4, 2, 1);
+				this._setReadonlyData(4, 4, 5);
+
+				// 第六行
+				this._setReadonlyData(5, 0, 2);
+				this._setReadonlyData(5, 5, 7);
+				this._setReadonlyData(5, 7, 4);
+
+				// 第七行
+				this._setReadonlyData(6, 0, 8);
+				this._setReadonlyData(6, 2, 2);
+				this._setReadonlyData(6, 5, 3);
+				this._setReadonlyData(6, 6, 1);
+				this._setReadonlyData(6, 7, 9);
+
+				// 第八行
+				this._setReadonlyData(7, 1, 1);
+				this._setReadonlyData(7, 2, 6);
+				this._setReadonlyData(7, 6, 2);
+
+				// 第九行
+				this._setReadonlyData(8, 0, 3);
+				this._setReadonlyData(8, 1, 9);
+				this._setReadonlyData(8, 2, 5);
+				this._setReadonlyData(8, 5, 8);
+				this._setReadonlyData(8, 6, 6);
+
+		  	},
+		  	complexModel : function(){ // 题目：复杂模式
+		  		// 第一行
+		  		this._setReadonlyData(0, 1, 9);
+		  		this._setReadonlyData(0, 7, 5);
+		  		this._setReadonlyData(0, 8, 7);
+
+				// 第二行
+				this._setReadonlyData(1, 3, 1);
+				this._setReadonlyData(1, 5, 4);
+
+				// 第三行
+				this._setReadonlyData(2, 0, 6);
+				this._setReadonlyData(2, 1, 2);
+				this._setReadonlyData(2, 3, 8);
+
+				// 第四行
+				this._setReadonlyData(3, 0, 9);
+				this._setReadonlyData(3, 3, 7);
+				this._setReadonlyData(3, 4, 8);
+
+				// 第五行
+				this._setReadonlyData(4, 5, 2);
+
+				// 第六行
+				this._setReadonlyData(5, 6, 8);
+				this._setReadonlyData(5, 7, 7);
+				this._setReadonlyData(5, 8, 5);
+
+				// 第七行
+				this._setReadonlyData(6, 7, 6);
+				this._setReadonlyData(6, 8, 1);
+
+				// 第八行
+				this._setReadonlyData(7, 3, 2);
+				this._setReadonlyData(7, 4, 4);
+				this._setReadonlyData(7, 7, 8);
+
+				// 第九行
+				this._setReadonlyData(8, 1, 5);
+				this._setReadonlyData(8, 2, 2);
+				this._setReadonlyData(8, 5, 6);
+				this._setReadonlyData(8, 8, 9);
+		  	}, ownModel () {
+		  		for(var i = 0; i< this.row; i++){
+					for(var j = 0; j< this.col; j++){
+						var node = this.digitDataArr[i][j];
+						if(node.digit != 0){
+							node.digit = parseInt(node.digit);
+							node.isFixed = true;
+							node.isReadonly = true;
+						}
+					}
+				}
+
+				this.__calcRemainder();
+		  	}
+		  },created : function(){
+		  	this.init(); //初始化
+		  }
+		});
+ 	</script>
+ </body>
+</html>
